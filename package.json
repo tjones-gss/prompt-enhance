@@ -1,0 +1,17 @@
+{
+  "name": "prompt-enhancer",
+  "private": true,
+  "workspaces": [
+    "extension",
+    "mcp-server"
+  ],
+  "scripts": {
+    "setup": "npm install && cd mcp-server && npm install",
+    "package": "cd extension && npx @vscode/vsce package --out ../build/",
+    "test": "jest --config jest.config.js",
+    "test:watch": "jest --watch"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}

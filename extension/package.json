@@ -1,0 +1,133 @@
+{
+  "name": "prompt-enhancer-auggie-style",
+  "displayName": "Prompt Enhancer (Auggie-style)",
+  "description": "Enhance rough prompts into detailed, context-aware instructions (Auggie-style). Includes a Ctrl+P webview workflow and editor selection enhancement.",
+  "version": "0.4.0",
+  "publisher": "local",
+  "license": "MIT",
+  "main": "./extension.js",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "activationEvents": [
+    "onCommand:promptEnhancer.openPanel",
+    "onCommand:promptEnhancer.enhanceSelection",
+    "onCommand:promptEnhancer.enhanceClipboard",
+    "onCommand:promptEnhancer.enhanceToChat",
+    "onCommand:promptEnhancer.enhanceClipboardToChat",
+    "onCommand:promptEnhancer.copyText",
+    "onCommand:promptEnhancer.fillChat",
+    "onChatParticipant:promptEnhancer.enhance"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "promptEnhancer.openPanel",
+        "title": "Prompt Enhancer: Open Panel"
+      },
+      {
+        "command": "promptEnhancer.enhanceSelection",
+        "title": "Prompt Enhancer: Enhance Selected Text"
+      },
+      {
+        "command": "promptEnhancer.enhanceClipboard",
+        "title": "Prompt Enhancer: Enhance Clipboard Text"
+      },
+      {
+        "command": "promptEnhancer.enhanceToChat",
+        "title": "Prompt Enhancer: Enhance & Send to Chat"
+      },
+      {
+        "command": "promptEnhancer.enhanceClipboardToChat",
+        "title": "Prompt Enhancer: Enhance Clipboard & Fill Chat"
+      },
+      {
+        "command": "promptEnhancer.copyText",
+        "title": "Prompt Enhancer: Copy Text"
+      },
+      {
+        "command": "promptEnhancer.fillChat",
+        "title": "Prompt Enhancer: Fill Chat Input"
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "promptEnhancer.enhance",
+        "name": "enhance",
+        "fullName": "Prompt Enhancer",
+        "description": "Enhance a rough prompt with workspace context",
+        "isSticky": false
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "promptEnhancer.enhanceToChat",
+          "when": "editorHasSelection",
+          "group": "1_modification@99"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "promptEnhancer.enhanceSelection",
+        "key": "ctrl+alt+p",
+        "mac": "cmd+alt+p",
+        "when": "editorTextFocus && editorHasSelection"
+      }
+    ],
+    "configuration": {
+      "title": "Prompt Enhancer",
+      "properties": {
+        "promptEnhancer.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key. If empty, OPENAI_API_KEY env var will be used. If still empty, the extension falls back to a non-LLM template enhancer."
+        },
+        "promptEnhancer.openaiBaseUrl": {
+          "type": "string",
+          "default": "https://api.openai.com",
+          "description": "Base URL for OpenAI-compatible APIs."
+        },
+        "promptEnhancer.openaiModel": {
+          "type": "string",
+          "default": "gpt-4o-mini",
+          "description": "Model name for the OpenAI-compatible API. Any model your provider supports will work. Examples: gpt-4o-mini, gpt-4o, gpt-4-turbo."
+        },
+        "promptEnhancer.maxRelevantFiles": {
+          "type": "number",
+          "default": 8,
+          "minimum": 0,
+          "maximum": 30,
+          "description": "Max number of relevant files to include as context."
+        },
+        "promptEnhancer.maxFileBytes": {
+          "type": "number",
+          "default": 65536,
+          "minimum": 1024,
+          "maximum": 1048576,
+          "description": "Max bytes to read per file when building context."
+        },
+        "promptEnhancer.useRipgrepIfAvailable": {
+          "type": "boolean",
+          "default": true,
+          "description": "If ripgrep (rg) exists on PATH, use it for fast keyword-to-file discovery."
+        },
+        "promptEnhancer.includeGitInfo": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include git status and changed files as context when available."
+        },
+        "promptEnhancer.autoCopyToClipboard": {
+          "type": "boolean",
+          "default": true,
+          "description": "Copy the enhanced prompt to the clipboard automatically."
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.0.0",
+    "@types/vscode": "^1.93.0"
+  }
+}
