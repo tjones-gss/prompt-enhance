@@ -1,3 +1,7 @@
+# Parent directory (vsce resolves ../ relative paths)
+../**
+
+# Dev/test files
 .vscode/**
 node_modules/**
 *.vsix
