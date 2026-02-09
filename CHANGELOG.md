@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] - 2025-02-09
+
+### Added
+- Editor-native language model support via `vscode.lm` API (Cursor / Copilot).
+- Zero-config experience: works out of the box in Cursor with no API key.
+- New `preferEditorLM` setting to control backend priority.
+- Backend indicator in webview, notifications, and chat participant (Cursor LM / OpenAI / Template).
+
+### Changed
+- Enhancement pipeline now tries Cursor LM first, then OpenAI, then template fallback.
+- Return type includes `backend` field ("cursor", "openai", or "template") alongside existing `usedLLM` boolean.
+
 ## [0.4.0] - 2025-02-01
 
 ### Added

@@ -93,13 +93,14 @@ describe("buildLLMInput", () => {
 describe("enhancePrompt – template fallback", () => {
   const workspaceRoot = path.resolve(__dirname, "../../..");
 
-  test("returns enhanced prompt with usedLLM=false when no API key", async () => {
+  test("returns enhanced prompt with usedLLM=false and backend=template when no API key", async () => {
     const result = await enhancePrompt({
       prompt: "add a dark mode toggle to the settings page",
       workspaceRoot,
       config: { openaiApiKey: "" },
     });
     expect(result.usedLLM).toBe(false);
+    expect(result.backend).toBe("template");
     expect(result.enhancedPrompt).toBeTruthy();
     expect(result.enhancedPrompt).toContain("Goal");
     expect(result.enhancedPrompt).toContain("dark mode toggle");
@@ -121,17 +122,17 @@ describe("enhancePrompt – template fallback", () => {
 });
 
 // ---------------------------------------------------------------------------
-// enhancePrompt – LLM path (mocked)
+// enhancePrompt – OpenAI LLM path (mocked)
 // ---------------------------------------------------------------------------
 
-describe("enhancePrompt – LLM path", () => {
+describe("enhancePrompt – OpenAI LLM path", () => {
   const workspaceRoot = path.resolve(__dirname, "../../..");
 
   beforeEach(() => {
     callOpenAI.mockReset();
   });
 
-  test("calls LLM when API key is provided and returns usedLLM=true", async () => {
+  test("calls OpenAI when API key is provided and returns backend=openai", async () => {
     callOpenAI.mockResolvedValue("Enhanced: do the thing properly");
 
     const result = await enhancePrompt({
@@ -144,6 +145,7 @@ describe("enhancePrompt – LLM path", () => {
       },
     });
     expect(result.usedLLM).toBe(true);
+    expect(result.backend).toBe("openai");
     expect(result.enhancedPrompt).toBe("Enhanced: do the thing properly");
     expect(callOpenAI).toHaveBeenCalledTimes(1);
 
@@ -152,5 +154,137 @@ describe("enhancePrompt – LLM path", () => {
     expect(callArgs.apiKey).toBe("sk-test-key");
     expect(callArgs.model).toBe("gpt-4o-mini");
     expect(callArgs.inputText).toContain("add tests");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// enhancePrompt – callEditorLM injection (editor-native LM)
+// ---------------------------------------------------------------------------
+
+describe("enhancePrompt – callEditorLM injection", () => {
+  const workspaceRoot = path.resolve(__dirname, "../../..");
+
+  beforeEach(() => {
+    callOpenAI.mockReset();
+  });
+
+  test("uses callEditorLM when provided and returns backend=cursor", async () => {
+    const mockEditorLM = jest.fn().mockResolvedValue("Enhanced via Cursor model");
+
+    const result = await enhancePrompt({
+      prompt: "fix the login bug",
+      workspaceRoot,
+      config: { openaiApiKey: "" },
+      callEditorLM: mockEditorLM,
+    });
+
+    expect(result.usedLLM).toBe(true);
+    expect(result.backend).toBe("cursor");
+    expect(result.enhancedPrompt).toBe("Enhanced via Cursor model");
+    expect(mockEditorLM).toHaveBeenCalledTimes(1);
+    // Should NOT call OpenAI
+    expect(callOpenAI).not.toHaveBeenCalled();
+  });
+
+  test("callEditorLM takes priority over OpenAI when both available", async () => {
+    const mockEditorLM = jest.fn().mockResolvedValue("Cursor result");
+    callOpenAI.mockResolvedValue("OpenAI result");
+
+    const result = await enhancePrompt({
+      prompt: "add dark mode",
+      workspaceRoot,
+      config: {
+        openaiApiKey: "sk-test-key",
+        openaiBaseUrl: "https://api.openai.com",
+        openaiModel: "gpt-4o-mini",
+      },
+      callEditorLM: mockEditorLM,
+    });
+
+    expect(result.backend).toBe("cursor");
+    expect(result.enhancedPrompt).toBe("Cursor result");
+    expect(mockEditorLM).toHaveBeenCalledTimes(1);
+    expect(callOpenAI).not.toHaveBeenCalled();
+  });
+
+  test("falls through to OpenAI when callEditorLM throws", async () => {
+    const mockEditorLM = jest.fn().mockRejectedValue(new Error("LM unavailable"));
+    callOpenAI.mockResolvedValue("OpenAI fallback result");
+
+    const result = await enhancePrompt({
+      prompt: "refactor auth",
+      workspaceRoot,
+      config: {
+        openaiApiKey: "sk-test-key",
+        openaiBaseUrl: "https://api.openai.com",
+        openaiModel: "gpt-4o-mini",
+      },
+      callEditorLM: mockEditorLM,
+    });
+
+    expect(result.backend).toBe("openai");
+    expect(result.enhancedPrompt).toBe("OpenAI fallback result");
+    expect(mockEditorLM).toHaveBeenCalledTimes(1);
+    expect(callOpenAI).toHaveBeenCalledTimes(1);
+  });
+
+  test("falls through to template when callEditorLM returns null and no API key", async () => {
+    const mockEditorLM = jest.fn().mockResolvedValue(null);
+
+    const result = await enhancePrompt({
+      prompt: "improve error handling",
+      workspaceRoot,
+      config: { openaiApiKey: "" },
+      callEditorLM: mockEditorLM,
+    });
+
+    expect(result.backend).toBe("template");
+    expect(result.usedLLM).toBe(false);
+    expect(result.enhancedPrompt).toContain("Goal");
+    expect(mockEditorLM).toHaveBeenCalledTimes(1);
+  });
+
+  test("falls through to template when callEditorLM returns empty string", async () => {
+    const mockEditorLM = jest.fn().mockResolvedValue("   ");
+
+    const result = await enhancePrompt({
+      prompt: "add logging",
+      workspaceRoot,
+      config: { openaiApiKey: "" },
+      callEditorLM: mockEditorLM,
+    });
+
+    expect(result.backend).toBe("template");
+    expect(result.usedLLM).toBe(false);
+  });
+
+  test("backward compat: works without callEditorLM (undefined)", async () => {
+    const result = await enhancePrompt({
+      prompt: "add feature flags",
+      workspaceRoot,
+      config: { openaiApiKey: "" },
+      // callEditorLM not provided
+    });
+
+    expect(result.backend).toBe("template");
+    expect(result.usedLLM).toBe(false);
+    expect(result.enhancedPrompt).toContain("Goal");
+  });
+
+  test("receives the combined LLM input text as argument", async () => {
+    const mockEditorLM = jest.fn().mockResolvedValue("Enhanced result");
+
+    await enhancePrompt({
+      prompt: "fix database query",
+      workspaceRoot,
+      config: { openaiApiKey: "" },
+      callEditorLM: mockEditorLM,
+    });
+
+    expect(mockEditorLM).toHaveBeenCalledTimes(1);
+    const inputText = mockEditorLM.mock.calls[0][0];
+    expect(inputText).toContain("fix database query");
+    expect(inputText).toContain("ORIGINAL PROMPT:");
+    expect(inputText).toContain("PROJECT CONTEXT");
   });
 });

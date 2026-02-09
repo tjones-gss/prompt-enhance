@@ -42,6 +42,7 @@ function getCfg() {
     useRipgrepIfAvailable: cfg.get("useRipgrepIfAvailable", true),
     includeGitInfo: cfg.get("includeGitInfo", true),
     autoCopyToClipboard: cfg.get("autoCopyToClipboard", true),
+    preferEditorLM: cfg.get("preferEditorLM", true),
   };
 }
 
@@ -108,6 +109,72 @@ function friendlyError(e) {
 }
 
 // ---------------------------------------------------------------------------
+// Editor-native Language Model (Cursor / Copilot)
+// ---------------------------------------------------------------------------
+
+/**
+ * Call the editor's built-in language model (Cursor / Copilot) via vscode.lm.
+ * Returns null if the API is unavailable or no models are found.
+ *
+ * @param {string} inputText - The combined prompt text.
+ * @returns {Promise<string|null>} The generated text, or null.
+ */
+async function callEditorLM(inputText) {
+  if (typeof vscode.lm?.selectChatModels !== "function") return null;
+
+  const models = await vscode.lm.selectChatModels({ vendor: "copilot" });
+  if (!models || !models.length) return null;
+
+  const messages = [vscode.LanguageModelChatMessage.User(inputText)];
+  const response = await models[0].sendRequest(messages, {});
+
+  let result = "";
+  for await (const chunk of response.text) {
+    result += chunk;
+  }
+  return result || null;
+}
+
+/**
+ * Create a callEditorLM wrapper that uses the chat participant's request model,
+ * which respects the model the user chose in the chat dropdown.
+ *
+ * @param {Object} request - The chat participant request object.
+ * @param {vscode.CancellationToken} token - Cancellation token from the participant handler.
+ * @returns {(inputText: string) => Promise<string|null>}
+ */
+function makeParticipantLM(request, token) {
+  return async function callParticipantLM(inputText) {
+    if (!request.model || typeof request.model.sendRequest !== "function") {
+      // Participant model unavailable -- fall back to selectChatModels
+      return callEditorLM(inputText);
+    }
+    const messages = [vscode.LanguageModelChatMessage.User(inputText)];
+    const response = await request.model.sendRequest(messages, {}, token);
+
+    let result = "";
+    for await (const chunk of response.text) {
+      result += chunk;
+    }
+    return result || null;
+  };
+}
+
+/**
+ * Map a backend identifier to a user-friendly label.
+ * @param {string} backend - "cursor", "openai", or "template".
+ * @returns {string}
+ */
+function backendLabel(backend) {
+  switch (backend) {
+    case "cursor": return "Cursor LM";
+    case "openai": return "LLM (OpenAI)";
+    case "template": return "Template";
+    default: return backend || "Unknown";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Core Enhancement
 // ---------------------------------------------------------------------------
 
@@ -150,6 +217,7 @@ async function enhanceFromEditorText(promptText, replaceSelection) {
       selectionText,
       config: cfg,
       abortSignal: inFlightAbort.signal,
+      callEditorLM: cfg.preferEditorLM ? callEditorLM : undefined,
     });
   } finally {
     clearTimeout(timer);
@@ -214,12 +282,13 @@ function ensurePanel(context) {
           type: "enhanced",
           enhancedPrompt: res.enhancedPrompt,
           usedLLM: res.usedLLM,
+          backend: res.backend,
           keywords: res.keywords,
           relevantFiles: res.relevantFiles,
         });
         panel.webview.postMessage({
           type: "status",
-          message: res.usedLLM ? "Enhanced (LLM). Copied to clipboard." : "Enhanced (template). Copied to clipboard.",
+          message: `Enhanced (${backendLabel(res.backend)}). Copied to clipboard.`,
         });
       } else if (msg?.type === "cancel") {
         if (inFlightAbort) {
@@ -352,7 +421,7 @@ function getWebviewHtml(webview) {
         metaEl.innerHTML = 
           '<div><strong>Keywords:</strong> ' + (kws.length ? kws.join(', ') : '(none)') + '</div>' +
           '<div><strong>Relevant files:</strong> ' + (files.length ? files.slice(0, 8).join(', ') : '(none)') + '</div>' +
-          '<div><strong>Backend:</strong> ' + (msg.usedLLM ? 'LLM (OpenAI-compatible)' : 'Template (no API key)') + '</div>';
+          '<div><strong>Backend:</strong> ' + (msg.backend === 'cursor' ? 'Cursor LM' : msg.backend === 'openai' ? 'LLM (OpenAI)' : 'Template') + '</div>';
       }
     });
   </script>
@@ -413,7 +482,7 @@ function activate(context) {
           return enhanceFromEditorText(promptText, true);
         }
       );
-      vscode.window.showInformationMessage(`Prompt Enhancer: enhanced (${res.usedLLM ? "LLM" : "template"}) and copied to clipboard.`);
+      vscode.window.showInformationMessage(`Prompt Enhancer: enhanced (${backendLabel(res.backend)}) and copied to clipboard.`);
     } catch (e) {
       vscode.window.showErrorMessage(`Prompt Enhancer: ${friendlyError(e)}`);
     }
@@ -440,7 +509,7 @@ function activate(context) {
         }
       );
       await vscode.env.clipboard.writeText(res.enhancedPrompt);
-      vscode.window.showInformationMessage(`Prompt Enhancer: enhanced (${res.usedLLM ? "LLM" : "template"}) and copied to clipboard.`);
+      vscode.window.showInformationMessage(`Prompt Enhancer: enhanced (${backendLabel(res.backend)}) and copied to clipboard.`);
     } catch (e) {
       vscode.window.showErrorMessage(`Prompt Enhancer: ${friendlyError(e)}`);
     }
@@ -575,6 +644,7 @@ function activate(context) {
             selectionText,
             config: cfg,
             abortSignal: abort.signal,
+            callEditorLM: cfg.preferEditorLM ? makeParticipantLM(request, token) : undefined,
           });
         } catch (e) {
           clearTimeout(timer);
@@ -593,7 +663,7 @@ function activate(context) {
         stream.markdown("\n\n---\n");
         stream.markdown("*Keywords:* " + (kws.length ? kws.join(", ") : "(none)") + "  \n");
         stream.markdown("*Relevant files:* " + (files.length ? files.slice(0, 8).join(", ") : "(none)") + "  \n");
-        stream.markdown("*Backend:* " + (res.usedLLM ? "LLM" : "Template") + "\n");
+        stream.markdown("*Backend:* " + backendLabel(res.backend) + "\n");
 
         // Action buttons
         stream.button({

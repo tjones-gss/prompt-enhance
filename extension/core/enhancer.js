@@ -2,8 +2,9 @@
 // Prompt enhancement pipeline:
 // - extract keywords from prompt
 // - gather workspace context (project signals, git, relevant files + snippets)
-// - call LLM (OpenAI Responses API preferred) to rewrite prompt
-// - fall back to a deterministic template if no API key is configured
+// - call editor-native LM (Cursor/Copilot) if available via injected callback
+// - call LLM (OpenAI Responses API preferred) if API key is configured
+// - fall back to a deterministic template otherwise
 
 const path = require("path");
 
@@ -305,6 +306,11 @@ function buildTemplateEnhancedPrompt({ originalPrompt, contextText, relevantFile
 /**
  * Enhance a raw prompt using workspace context and optionally an LLM.
  *
+ * Backend priority:
+ *   1. Editor-native LM (Cursor/Copilot) via injected `callEditorLM` callback
+ *   2. OpenAI-compatible API (if API key is configured)
+ *   3. Deterministic template fallback
+ *
  * @param {Object} options
  * @param {string} options.prompt - The raw user prompt.
  * @param {string} options.workspaceRoot - Absolute path to workspace root.
@@ -312,7 +318,8 @@ function buildTemplateEnhancedPrompt({ originalPrompt, contextText, relevantFile
  * @param {string} [options.selectionText] - Currently selected text in the editor.
  * @param {Object} [options.config] - Extension configuration overrides.
  * @param {AbortSignal} [options.abortSignal] - Signal to abort the operation.
- * @returns {Promise<{enhancedPrompt: string, usedLLM: boolean, keywords: string[], relevantFiles: string[]}>}
+ * @param {((inputText: string) => Promise<string|null>)} [options.callEditorLM] - Optional callback to call the editor's built-in language model.
+ * @returns {Promise<{enhancedPrompt: string, usedLLM: boolean, backend: string, keywords: string[], relevantFiles: string[]}>}
  */
 async function enhancePrompt({
   prompt,
@@ -321,6 +328,7 @@ async function enhancePrompt({
   selectionText,
   config,
   abortSignal,
+  callEditorLM,
 }) {
   if (!prompt || !prompt.trim()) {
     throw new Error("No prompt text provided.");
@@ -341,38 +349,52 @@ async function enhancePrompt({
     config,
   });
 
-  // 3. Check for API key
+  // 3. Build LLM input (shared across all LLM backends)
+  const combinedInput = buildLLMInput({ prompt, contextText });
+
+  // 4a. Try editor-native LM (Cursor/Copilot) first
+  if (typeof callEditorLM === "function") {
+    try {
+      const text = await callEditorLM(combinedInput);
+      if (text && text.trim()) {
+        return { enhancedPrompt: text.trim(), usedLLM: true, backend: "cursor", keywords, relevantFiles };
+      }
+    } catch {
+      // Editor LM unavailable or failed -- fall through to next backend
+    }
+  }
+
+  // 4b. Try OpenAI if key configured
   const apiKey = (config?.openaiApiKey || process.env.OPENAI_API_KEY || "").trim();
   const baseUrl = (config?.openaiBaseUrl || "https://api.openai.com").trim();
   const model = (config?.openaiModel || "gpt-4o-mini").trim();
 
-  if (!apiKey) {
-    const enhanced = buildTemplateEnhancedPrompt({
-      originalPrompt: prompt,
-      contextText,
+  if (apiKey) {
+    const llmText = await callOpenAI({
+      apiKey,
+      baseUrl,
+      model,
+      inputText: combinedInput,
+      temperature: 0.2,
+      abortSignal,
+    });
+
+    return {
+      enhancedPrompt: llmText.trim(),
+      usedLLM: true,
+      backend: "openai",
+      keywords,
       relevantFiles,
-    }).trim();
-    return { enhancedPrompt: enhanced, usedLLM: false, keywords, relevantFiles };
+    };
   }
 
-  // 4. Build LLM input and call
-  const combinedInput = buildLLMInput({ prompt, contextText });
-
-  const llmText = await callOpenAI({
-    apiKey,
-    baseUrl,
-    model,
-    inputText: combinedInput,
-    temperature: 0.2,
-    abortSignal,
-  });
-
-  return {
-    enhancedPrompt: llmText.trim(),
-    usedLLM: true,
-    keywords,
+  // 4c. Template fallback
+  const enhanced = buildTemplateEnhancedPrompt({
+    originalPrompt: prompt,
+    contextText,
     relevantFiles,
-  };
+  }).trim();
+  return { enhancedPrompt: enhanced, usedLLM: false, backend: "template", keywords, relevantFiles };
 }
 
 // ---------------------------------------------------------------------------

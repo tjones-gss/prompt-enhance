@@ -1,9 +1,14 @@
 # Prompt Enhancer (Auggie-style)
 
-Enhance rough prompts into detailed, context-aware instructions for coding agents. Works in two modes:
+Enhance rough prompts into detailed, context-aware instructions for coding agents. **Works out of the box in Cursor with zero configuration** -- no API key needed.
 
-1. **VS Code / Cursor Extension** -- a webview panel, editor commands, and a chat participant that rewrite your prompt using workspace context and (optionally) an LLM.
-2. **MCP Server** -- a standalone tool for Cursor Agent that gathers repo context so Cursor's own model can rewrite your prompt (no OpenAI key needed).
+The extension uses three backends in priority order:
+
+1. **Cursor / Copilot LM** (preferred) -- uses the editor's built-in language model via `vscode.lm`. Zero setup.
+2. **OpenAI API** -- if you configure an API key, uses any OpenAI-compatible provider.
+3. **Template fallback** -- deterministic template when no LLM is available.
+
+Also includes an **MCP Server** for Cursor Agent that gathers repo context so Cursor's own model can rewrite your prompt directly in chat.
 
 ## Prerequisites
 
@@ -89,7 +94,8 @@ All settings are under `promptEnhancer.*` in VS Code / Cursor settings:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `openaiApiKey` | `""` | OpenAI API key. Falls back to `OPENAI_API_KEY` env var. If empty, uses a template-based enhancer (no LLM). |
+| `preferEditorLM` | `true` | Prefer the editor's built-in language model (Cursor/Copilot) over OpenAI. Set to `false` to always use OpenAI when a key is configured. |
+| `openaiApiKey` | `""` | OpenAI API key. Falls back to `OPENAI_API_KEY` env var. Only used when editor LM is unavailable or disabled. |
 | `openaiBaseUrl` | `https://api.openai.com` | Base URL for OpenAI-compatible APIs. |
 | `openaiModel` | `gpt-4o-mini` | Model name. Any model your provider supports. |
 | `maxRelevantFiles` | `8` | Max relevant files to include as context. |
