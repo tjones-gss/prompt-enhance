@@ -2,7 +2,7 @@
   "name": "prompt-enhancer-auggie-style",
   "displayName": "Prompt Enhancer (Auggie-style)",
   "description": "Enhance rough prompts into detailed, context-aware instructions (Auggie-style). Includes a Ctrl+P webview workflow and editor selection enhancement.",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "publisher": "local",
   "license": "MIT",
   "repository": {

@@ -144,6 +144,32 @@ let _agentCLIPath = null;
 let _shownCLINotice = false;
 
 /**
+ * Open an integrated terminal that installs the Cursor CLI and runs `agent login`.
+ * After triggering, the cached CLI path is cleared so the next enhancement attempt
+ * will re-detect the freshly installed binary.
+ */
+function installAndAuthCLI() {
+  const isWin = process.platform === "win32";
+  const installCmd = isWin
+    ? "powershell -NoProfile -Command \"irm 'https://cursor.com/install?win32=true' | iex\""
+    : "curl https://cursor.com/install -fsS | bash";
+
+  const loginCmd = isWin
+    ? "\"%LOCALAPPDATA%\\cursor-agent\\agent.cmd\" login"
+    : "agent login";
+
+  const term = vscode.window.createTerminal({ name: "Cursor CLI Setup" });
+  term.show();
+  // Chain: install, then login (login only runs if install succeeds)
+  term.sendText(`${installCmd} && ${loginCmd}`, true);
+
+  // Invalidate cached path so next call to findAgentCLI() re-searches
+  _agentCLIPath = null;
+
+  log("installAndAuthCLI: terminal opened, install + login command sent");
+}
+
+/**
  * Locate the Cursor Agent CLI (`agent` / `agent.cmd`) on this machine.
  * Result is cached for the lifetime of the extension host process.
  *
@@ -234,15 +260,14 @@ async function callEditorLM(inputText) {
     if (!_shownCLINotice) {
       _shownCLINotice = true;
       vscode.window
-        .showInformationMessage(
-          "Prompt Enhancer: Install the Cursor CLI for AI-powered enhancement (no API key needed).",
-          "Install Guide"
+        .showWarningMessage(
+          "Cursor CLI not installed. Install now for AI-powered prompt enhancement (no API key needed)?",
+          "Install Now",
+          "Not Now"
         )
         .then((choice) => {
-          if (choice === "Install Guide") {
-            vscode.env.openExternal(
-              vscode.Uri.parse("https://docs.cursor.com/agent/agent-cli")
-            );
+          if (choice === "Install Now") {
+            installAndAuthCLI();
           }
         });
     }
