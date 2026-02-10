@@ -1,10 +1,10 @@
 # Prompt Enhancer (Auggie-style)
 
-Enhance rough prompts into detailed, context-aware instructions for coding agents. **Works out of the box in Cursor with zero configuration** -- no API key needed.
+Enhance rough prompts into detailed, context-aware instructions for coding agents. **Works out of the box with the Cursor CLI** -- no API key needed. Uses your existing Cursor subscription models (Claude, GPT, Gemini, etc.).
 
 The extension uses three backends in priority order:
 
-1. **Cursor / Copilot LM** (preferred) -- uses the editor's built-in language model via `vscode.lm`. Zero setup.
+1. **Cursor CLI** (preferred) -- calls the `agent` CLI in headless mode using your Cursor subscription. Zero API key needed.
 2. **OpenAI API** -- if you configure an API key, uses any OpenAI-compatible provider.
 3. **Template fallback** -- deterministic template when no LLM is available.
 
@@ -14,28 +14,59 @@ Also includes an **MCP Server** for Cursor Agent that gathers repo context so Cu
 
 - **Node.js** >= 18
 - **Cursor** or **VS Code** >= 1.93
+- **Cursor CLI** (recommended) -- for AI-powered enhancement without an API key
 
-## Quick Start
+### Installing the Cursor CLI
+
+The Cursor CLI (`agent`) is a one-time install per machine:
+
+```bash
+# Windows (PowerShell)
+irm 'https://cursor.com/install?win32=true' | iex
+
+# macOS / Linux / WSL
+curl https://cursor.com/install -fsS | bash
+```
+
+After install, authenticate:
+
+```bash
+agent login
+```
+
+Verify it works:
+
+```bash
+agent --version
+```
+
+> **Note:** The extension auto-detects the CLI and falls through gracefully if it's not installed. You'll see a one-time notification with install instructions.
+
+## Quick Start (one command)
 
 ```bash
 git clone https://github.com/tjones-gss/prompt-enhance.git
 cd prompt-enhance
-npm run setup
+
+# Windows (PowerShell)
+.\setup.ps1
+
+# macOS / Linux / WSL
+./setup.sh
 ```
 
-`npm run setup` installs root dependencies and the MCP server's dependencies in one step.
+The setup script handles everything: installs the Cursor CLI, authenticates, installs npm dependencies, builds the VSIX, and installs the extension into Cursor. Just follow the prompts.
 
-## Installing the Extension
+### Manual Setup (alternative)
 
-Build the `.vsix` package:
+If you prefer to do it step by step:
 
 ```bash
-npm run package
+npm run setup          # Install npm dependencies
+npm run package        # Build the VSIX
 ```
 
-This outputs `build/prompt-enhancer-auggie-style-<version>.vsix`.
-
-Install in Cursor / VS Code:
+Then install the `.vsix` from `build/`:
 
 1. `Ctrl+Shift+P` (or `Cmd+Shift+P` on macOS)
 2. **Extensions: Install from VSIX...**
@@ -94,8 +125,8 @@ All settings are under `promptEnhancer.*` in VS Code / Cursor settings:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `preferEditorLM` | `true` | Prefer the editor's built-in language model (Cursor/Copilot) over OpenAI. Set to `false` to always use OpenAI when a key is configured. |
-| `openaiApiKey` | `""` | OpenAI API key. Falls back to `OPENAI_API_KEY` env var. Only used when editor LM is unavailable or disabled. |
+| `preferEditorLM` | `true` | Prefer the Cursor CLI over OpenAI. Set to `false` to always use OpenAI when a key is configured. |
+| `openaiApiKey` | `""` | OpenAI API key. Falls back to `OPENAI_API_KEY` env var. Only used when Cursor CLI is unavailable or disabled. |
 | `openaiBaseUrl` | `https://api.openai.com` | Base URL for OpenAI-compatible APIs. |
 | `openaiModel` | `gpt-4o-mini` | Model name. Any model your provider supports. |
 | `maxRelevantFiles` | `8` | Max relevant files to include as context. |
@@ -110,6 +141,8 @@ All settings are under `promptEnhancer.*` in VS Code / Cursor settings:
 
 ```
 prompt-enhance/
+  setup.ps1               # One-command setup (Windows)
+  setup.sh                # One-command setup (macOS/Linux)
   package.json            # Root workspace config & scripts
   jest.config.js          # Test configuration
   extension/

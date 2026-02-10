@@ -7,6 +7,7 @@
   ],
   "scripts": {
     "setup": "npm install && cd mcp-server && npm install",
+    "install:all": "npm run setup && npm run package",
     "package": "cd extension && npx @vscode/vsce package --out ../build/",
     "test": "jest --config jest.config.js",
     "test:watch": "jest --watch"

@@ -2,7 +2,7 @@
   "name": "prompt-enhancer-auggie-style",
   "displayName": "Prompt Enhancer (Auggie-style)",
   "description": "Enhance rough prompts into detailed, context-aware instructions (Auggie-style). Includes a Ctrl+P webview workflow and editor selection enhancement.",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "publisher": "local",
   "license": "MIT",
   "repository": {
@@ -130,7 +130,7 @@
         "promptEnhancer.preferEditorLM": {
           "type": "boolean",
           "default": true,
-          "description": "Prefer the editor's built-in language model (Cursor/Copilot) over OpenAI. Set to false to always use OpenAI when a key is configured."
+          "description": "Prefer the Cursor CLI (agent) over OpenAI for AI-powered enhancement. Set to false to always use OpenAI when a key is configured."
         }
       }
     }

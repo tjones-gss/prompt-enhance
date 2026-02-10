@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.1] - 2026-02-09
+
+### Changed
+- Replaced `vscode.lm` backend with Cursor CLI (`agent -p --mode=ask`) for AI-powered enhancement. Uses your existing Cursor subscription models -- no API key required.
+- Prompt is piped via stdin to avoid Windows argument-length limits on long prompts.
+- Added `findAgentCLI()` helper that auto-discovers the CLI with result caching.
+- Added one-time "Install Cursor CLI" notification when the CLI is not found.
+- Updated backend label from "Cursor LM" to "Cursor CLI" in webview, notifications, and chat participant.
+
+### Fixed
+- AI-powered enhancement now actually works in Cursor IDE (the previous `vscode.lm` API is not supported by Cursor).
+
 ## [0.5.0] - 2025-02-09
 
 ### Added

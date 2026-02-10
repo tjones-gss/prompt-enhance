@@ -2,6 +2,10 @@
 // VS Code extension entry point for Prompt Enhancer.
 
 const vscode = require("vscode");
+const cp = require("child_process");
+const path = require("path");
+const os = require("os");
+const fs = require("fs");
 
 const { enhancePrompt } = require("./core/enhancer");
 const { OpenAIError } = require("./core/openai");
@@ -109,55 +113,153 @@ function friendlyError(e) {
 }
 
 // ---------------------------------------------------------------------------
-// Editor-native Language Model (Cursor / Copilot)
+// Cursor CLI LLM Backend
 // ---------------------------------------------------------------------------
 
 /**
- * Call the editor's built-in language model (Cursor / Copilot) via vscode.lm.
- * Returns null if the API is unavailable or no models are found.
- *
- * @param {string} inputText - The combined prompt text.
- * @returns {Promise<string|null>} The generated text, or null.
+ * Cached path to the Cursor agent CLI executable (or false if not found).
+ * @type {string|false|null} null = not yet checked
  */
-async function callEditorLM(inputText) {
-  if (typeof vscode.lm?.selectChatModels !== "function") return null;
+let _agentCLIPath = null;
 
-  const models = await vscode.lm.selectChatModels({ vendor: "copilot" });
-  if (!models || !models.length) return null;
+/** Whether we've already shown the "CLI not installed" info message this session. */
+let _shownCLINotice = false;
 
-  const messages = [vscode.LanguageModelChatMessage.User(inputText)];
-  const response = await models[0].sendRequest(messages, {});
+/**
+ * Locate the Cursor Agent CLI (`agent` / `agent.cmd`) on this machine.
+ * Result is cached for the lifetime of the extension host process.
+ *
+ * Search order:
+ *   1. %LOCALAPPDATA%\cursor-agent\agent.cmd  (Windows installer default)
+ *   2. ~/.cursor/bin/agent                     (macOS / Linux)
+ *   3. `which agent` / `where agent` on PATH
+ *
+ * @returns {Promise<string|null>} Absolute path to the CLI executable, or null.
+ */
+async function findAgentCLI() {
+  if (_agentCLIPath !== null) return _agentCLIPath || null;
 
-  let result = "";
-  for await (const chunk of response.text) {
-    result += chunk;
+  const isWin = process.platform === "win32";
+
+  // 1. Check well-known install locations
+  const candidates = [];
+  if (isWin) {
+    const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+    candidates.push(path.join(localAppData, "cursor-agent", "agent.cmd"));
+  } else {
+    candidates.push(path.join(os.homedir(), ".cursor", "bin", "agent"));
+    candidates.push("/usr/local/bin/agent");
   }
-  return result || null;
+
+  for (const p of candidates) {
+    try {
+      fs.accessSync(p, fs.constants.X_OK);
+      _agentCLIPath = p;
+      return p;
+    } catch {
+      // not found here, keep looking
+    }
+  }
+
+  // 2. Fall back to PATH lookup
+  return new Promise((resolve) => {
+    const cmd = isWin ? "where" : "which";
+    cp.execFile(cmd, ["agent"], { timeout: 5000 }, (err, stdout) => {
+      if (err || !stdout?.trim()) {
+        _agentCLIPath = false;
+        resolve(null);
+      } else {
+        const found = stdout.trim().split(/\r?\n/)[0];
+        _agentCLIPath = found;
+        resolve(found);
+      }
+    });
+  });
 }
 
 /**
- * Create a callEditorLM wrapper that uses the chat participant's request model,
- * which respects the model the user chose in the chat dropdown.
+ * Call the Cursor Agent CLI in headless print mode to enhance a prompt.
+ * Uses stdin piping to avoid argument-length limits on Windows (~8191 chars).
  *
- * @param {Object} request - The chat participant request object.
- * @param {vscode.CancellationToken} token - Cancellation token from the participant handler.
- * @returns {(inputText: string) => Promise<string|null>}
+ * @param {string} inputText - The combined prompt text.
+ * @returns {Promise<string|null>} The AI-generated text, or null if the CLI is unavailable.
  */
-function makeParticipantLM(request, token) {
-  return async function callParticipantLM(inputText) {
-    if (!request.model || typeof request.model.sendRequest !== "function") {
-      // Participant model unavailable -- fall back to selectChatModels
-      return callEditorLM(inputText);
+async function callEditorLM(inputText) {
+  const agentPath = await findAgentCLI();
+  if (!agentPath) {
+    if (!_shownCLINotice) {
+      _shownCLINotice = true;
+      vscode.window
+        .showInformationMessage(
+          "Prompt Enhancer: Install the Cursor CLI for AI-powered enhancement (no API key needed).",
+          "Install Guide"
+        )
+        .then((choice) => {
+          if (choice === "Install Guide") {
+            vscode.env.openExternal(
+              vscode.Uri.parse("https://docs.cursor.com/agent/agent-cli")
+            );
+          }
+        });
     }
-    const messages = [vscode.LanguageModelChatMessage.User(inputText)];
-    const response = await request.model.sendRequest(messages, {}, token);
+    return null;
+  }
 
-    let result = "";
-    for await (const chunk of response.text) {
-      result += chunk;
+  // Find the bundled rg.exe path so the CLI can locate ripgrep
+  const agentDir = path.dirname(agentPath);
+  let extraPath = "";
+  try {
+    // agent installs rg inside its versions directory
+    const versionsDir = path.join(agentDir, "versions");
+    if (fs.existsSync(versionsDir)) {
+      const versions = fs.readdirSync(versionsDir).sort().reverse();
+      for (const v of versions) {
+        const rgCandidate = path.join(versionsDir, v, process.platform === "win32" ? "rg.exe" : "rg");
+        if (fs.existsSync(rgCandidate)) {
+          extraPath = path.join(versionsDir, v);
+          break;
+        }
+      }
     }
-    return result || null;
-  };
+  } catch {
+    // ignore -- the CLI may still work without extra PATH
+  }
+
+  return new Promise((resolve, reject) => {
+    const env = { ...process.env };
+    if (extraPath) {
+      env.PATH = extraPath + (process.platform === "win32" ? ";" : ":") + (env.PATH || "");
+    }
+
+    const proc = cp.execFile(
+      agentPath,
+      ["-p", "--mode=ask", "--output-format", "text"],
+      {
+        timeout: 60_000,
+        maxBuffer: 2 * 1024 * 1024,
+        env,
+        cwd: getWorkspaceRoot() || undefined,
+      },
+      (err, stdout, stderr) => {
+        if (err) {
+          // Provide context on common failure modes
+          if (err.killed) {
+            reject(new Error("Cursor CLI timed out (60 s). Try a shorter prompt."));
+          } else if (stderr && /auth/i.test(stderr)) {
+            reject(new Error("Cursor CLI not authenticated. Run: agent login"));
+          } else {
+            reject(err);
+          }
+          return;
+        }
+        resolve(stdout.trim() || null);
+      }
+    );
+
+    // Pipe prompt via stdin to avoid Windows argument-length limits
+    proc.stdin.write(inputText);
+    proc.stdin.end();
+  });
 }
 
 /**
@@ -167,7 +269,7 @@ function makeParticipantLM(request, token) {
  */
 function backendLabel(backend) {
   switch (backend) {
-    case "cursor": return "Cursor LM";
+    case "cursor": return "Cursor CLI";
     case "openai": return "LLM (OpenAI)";
     case "template": return "Template";
     default: return backend || "Unknown";
@@ -421,7 +523,7 @@ function getWebviewHtml(webview) {
         metaEl.innerHTML = 
           '<div><strong>Keywords:</strong> ' + (kws.length ? kws.join(', ') : '(none)') + '</div>' +
           '<div><strong>Relevant files:</strong> ' + (files.length ? files.slice(0, 8).join(', ') : '(none)') + '</div>' +
-          '<div><strong>Backend:</strong> ' + (msg.backend === 'cursor' ? 'Cursor LM' : msg.backend === 'openai' ? 'LLM (OpenAI)' : 'Template') + '</div>';
+          '<div><strong>Backend:</strong> ' + (msg.backend === 'cursor' ? 'Cursor CLI' : msg.backend === 'openai' ? 'LLM (OpenAI)' : 'Template') + '</div>';
       }
     });
   </script>
@@ -644,7 +746,7 @@ function activate(context) {
             selectionText,
             config: cfg,
             abortSignal: abort.signal,
-            callEditorLM: cfg.preferEditorLM ? makeParticipantLM(request, token) : undefined,
+            callEditorLM: cfg.preferEditorLM ? callEditorLM : undefined,
           });
         } catch (e) {
           clearTimeout(timer);
