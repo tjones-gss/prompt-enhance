@@ -225,40 +225,76 @@ async function callEditorLM(inputText) {
     // ignore -- the CLI may still work without extra PATH
   }
 
+  // Write the prompt to a temp file, then use cmd.exe file redirect (<) to
+  // feed it to the CLI. Direct stdin piping to .cmd files on Windows hangs
+  // for large multi-line inputs; file redirect is reliable cross-platform.
+  const tmpFile = path.join(os.tmpdir(), `pe-prompt-${Date.now()}.txt`);
+  fs.writeFileSync(tmpFile, inputText, "utf8");
+
   return new Promise((resolve, reject) => {
     const env = { ...process.env };
     if (extraPath) {
       env.PATH = extraPath + (process.platform === "win32" ? ";" : ":") + (env.PATH || "");
     }
 
-    const proc = cp.execFile(
-      agentPath,
-      ["-p", "--mode=ask", "--output-format", "text"],
-      {
-        timeout: 60_000,
-        maxBuffer: 2 * 1024 * 1024,
+    const args = ["-p", "--mode=ask", "--output-format", "text"];
+    const isWin = process.platform === "win32";
+
+    // On Windows, .cmd files must be invoked via cmd.exe /c with < redirect.
+    // On Unix, we can pipe stdin directly.
+    let proc;
+    if (isWin) {
+      proc = cp.spawn("cmd.exe", ["/c", agentPath, ...args, "<", tmpFile], {
+        stdio: ["ignore", "pipe", "pipe"],
         env,
         cwd: getWorkspaceRoot() || undefined,
-      },
-      (err, stdout, stderr) => {
-        if (err) {
-          // Provide context on common failure modes
-          if (err.killed) {
-            reject(new Error("Cursor CLI timed out (60 s). Try a shorter prompt."));
-          } else if (stderr && /auth/i.test(stderr)) {
-            reject(new Error("Cursor CLI not authenticated. Run: agent login"));
-          } else {
-            reject(err);
-          }
-          return;
-        }
-        resolve(stdout.trim() || null);
-      }
-    );
+      });
+    } else {
+      proc = cp.spawn(agentPath, args, {
+        stdio: ["pipe", "pipe", "pipe"],
+        env,
+        cwd: getWorkspaceRoot() || undefined,
+      });
+      // On Unix, pipe via stdin
+      proc.stdin.write(inputText);
+      proc.stdin.end();
+    }
 
-    // Pipe prompt via stdin to avoid Windows argument-length limits
-    proc.stdin.write(inputText);
-    proc.stdin.end();
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    proc.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+
+    function cleanup() {
+      try { fs.unlinkSync(tmpFile); } catch {}
+    }
+
+    // Auto-kill after 60 seconds
+    const timer = setTimeout(() => {
+      proc.kill();
+      cleanup();
+      reject(new Error("Cursor CLI timed out (60 s). Try a shorter prompt."));
+    }, 60_000);
+
+    proc.on("error", (err) => {
+      clearTimeout(timer);
+      cleanup();
+      reject(err);
+    });
+
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      cleanup();
+      if (code !== 0) {
+        if (stderr && /auth/i.test(stderr)) {
+          reject(new Error("Cursor CLI not authenticated. Run: agent login"));
+        } else {
+          reject(new Error(stderr.trim() || `Cursor CLI exited with code ${code}`));
+        }
+        return;
+      }
+      resolve(stdout.trim() || null);
+    });
   });
 }
 
