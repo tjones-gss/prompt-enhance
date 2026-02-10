@@ -143,8 +143,6 @@ function friendlyError(e) {
  */
 let _agentCLIPath = null;
 
-/** Whether we've already shown the "CLI not installed" info message this session. */
-let _shownCLINotice = false;
 
 /**
  * Open an integrated terminal that installs the Cursor CLI and runs `agent login`.
@@ -260,20 +258,17 @@ async function callEditorLM(inputText) {
   const agentPath = await findAgentCLI();
   if (!agentPath) {
     log("callEditorLM: CLI not found, returning null");
-    if (!_shownCLINotice) {
-      _shownCLINotice = true;
-      vscode.window
-        .showWarningMessage(
-          "Cursor CLI not installed. Install now for AI-powered prompt enhancement (no API key needed)?",
-          "Install Now",
-          "Not Now"
-        )
-        .then((choice) => {
-          if (choice === "Install Now") {
-            installAndAuthCLI();
-          }
-        });
-    }
+    vscode.window
+      .showWarningMessage(
+        "Cursor CLI not installed. Install now for AI-powered prompt enhancement (no API key needed)?",
+        "Install Now",
+        "Not Now"
+      )
+      .then((choice) => {
+        if (choice === "Install Now") {
+          installAndAuthCLI();
+        }
+      });
     return null;
   }
 
@@ -580,6 +575,9 @@ function ensurePanel(context) {
           { query: text, isPartialQuery: true }
         );
         panel.webview.postMessage({ type: "status", message: "Sent to Chat input." });
+      } else if (msg?.type === "installCLI") {
+        installAndAuthCLI();
+        panel.webview.postMessage({ type: "status", message: "Installing Cursor CLI... Check the terminal that opened." });
       }
     } catch (e) {
       const m = friendlyError(e);
@@ -637,6 +635,24 @@ function getWebviewHtml(webview) {
     }
     .tip.fade-in { opacity: 0.6; }
     .tip.fade-out { opacity: 0; }
+
+    .cli-banner {
+      display: none;
+      margin-top: 12px;
+      padding: 12px 14px;
+      border: 1px solid var(--vscode-editorWarning-foreground, #cca700);
+      border-radius: 6px;
+      background: var(--vscode-editorWarning-background, rgba(204,167,0,0.08));
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .cli-banner.visible { display: block; }
+    .cli-banner p { margin: 0 0 8px 0; }
+    .cli-banner button {
+      padding: 6px 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
@@ -664,6 +680,11 @@ function getWebviewHtml(webview) {
   <div id="tip" class="tip"></div>
   <div id="meta" class="meta"></div>
 
+  <div id="cliBanner" class="cli-banner">
+    <p><strong>AI enhancement requires the Cursor CLI.</strong> The result above used a basic template instead of AI. Install the CLI to get full AI-powered enhancement (uses your Cursor subscription, no API key needed).</p>
+    <button id="installCliBtn">Install Cursor CLI</button>
+  </div>
+
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
 
@@ -672,6 +693,13 @@ function getWebviewHtml(webview) {
     const spinnerEl = document.getElementById('spinnerEl');
     const tipEl = document.getElementById('tip');
     const metaEl = document.getElementById('meta');
+    const cliBannerEl = document.getElementById('cliBanner');
+
+    document.getElementById('installCliBtn').addEventListener('click', () => {
+      vscode.postMessage({ type: 'installCLI' });
+      cliBannerEl.className = 'cli-banner';
+      setStatus('Installing Cursor CLI... Check the terminal that just opened.', false, false);
+    });
 
     let latestEnhanced = '';
     let tipInterval = null;
@@ -766,6 +794,8 @@ function getWebviewHtml(webview) {
           '<div><strong>Keywords:</strong> ' + (kws.length ? kws.join(', ') : '(none)') + '</div>' +
           '<div><strong>Relevant files:</strong> ' + (files.length ? files.slice(0, 8).join(', ') : '(none)') + '</div>' +
           '<div><strong>Backend:</strong> ' + (msg.backend === 'cursor' ? 'Cursor CLI' : msg.backend === 'openai' ? 'LLM (OpenAI)' : 'Template') + '</div>';
+        // Show the CLI install banner when template fallback is used
+        cliBannerEl.className = msg.backend === 'template' ? 'cli-banner visible' : 'cli-banner';
       }
     });
   </script>
@@ -797,6 +827,16 @@ function activate(context) {
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("promptEnhancer")) {
         checkAndWarnConfig();
+      }
+    })
+  );
+
+  // Clear CLI cache when window regains focus (user may have installed CLI in terminal)
+  context.subscriptions.push(
+    vscode.window.onDidChangeWindowState((state) => {
+      if (state.focused && _agentCLIPath === false) {
+        log("Window regained focus — clearing CLI cache to re-detect");
+        _agentCLIPath = null;
       }
     })
   );
