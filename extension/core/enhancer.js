@@ -359,8 +359,9 @@ async function enhancePrompt({
       if (text && text.trim()) {
         return { enhancedPrompt: text.trim(), usedLLM: true, backend: "cursor", keywords, relevantFiles };
       }
-    } catch {
-      // Editor LM unavailable or failed -- fall through to next backend
+    } catch (editorLMError) {
+      // Log the error so it's visible in the Output panel for debugging
+      console.warn("[Prompt Enhancer] callEditorLM failed, falling through:", editorLMError?.message || editorLMError);
     }
   }
 

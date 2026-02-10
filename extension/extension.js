@@ -15,7 +15,7 @@ const { OpenAIError } = require("./core/openai");
 // ---------------------------------------------------------------------------
 
 /** Maximum time (ms) to wait for an enhance operation before auto-aborting. */
-const ENHANCE_TIMEOUT_MS = 30_000;
+const ENHANCE_TIMEOUT_MS = 90_000;
 
 // ---------------------------------------------------------------------------
 // State
