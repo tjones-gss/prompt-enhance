@@ -104,32 +104,42 @@ function clampText(text, maxChars) {
  * @param {string} [opts.activeFilePath] - Currently active editor file.
  * @param {string} [opts.selectionText] - Selected text in the editor.
  * @param {Object} [opts.config] - Extension config values.
+ * @param {(phase: string) => void} [opts.onProgress] - Optional callback to report progress phases.
  * @returns {Promise<{contextText: string, relevantFiles: string[], snippets: Array}>}
  */
-async function gatherContext({ workspaceRoot, keywords, activeFilePath, selectionText, config }) {
+async function gatherContext({ workspaceRoot, keywords, activeFilePath, selectionText, config, onProgress }) {
   const maxRelevantFiles = Number(config?.maxRelevantFiles ?? 8);
   const maxFileBytes = Number(config?.maxFileBytes ?? 65536);
   const useRipgrepIfAvailable = Boolean(config?.useRipgrepIfAvailable ?? true);
   const includeGitInfo = Boolean(config?.includeGitInfo ?? true);
+  const report = typeof onProgress === "function" ? onProgress : () => {};
 
+  report("Scanning workspace...");
   const projectSummary = getCachedProjectSummary(workspaceRoot);
 
-  const gitContext = includeGitInfo
-    ? await getCachedGitContext(workspaceRoot)
-    : { available: false };
+  // Run git context and file discovery in parallel (they are independent)
+  report("Analyzing git history & finding files...");
 
-  // -- Relevant file discovery --
-  let relevantFiles = [];
-  if (maxRelevantFiles > 0 && keywords.length > 0) {
-    let result = { used: false, files: [] };
-    if (useRipgrepIfAvailable) {
-      result = await findRelevantFilesWithRipgrep(workspaceRoot, keywords, maxRelevantFiles);
-    }
-    if (!result.files.length) {
-      result = await findRelevantFilesFallback(workspaceRoot, keywords, maxRelevantFiles);
-    }
-    relevantFiles = result.files;
-  }
+  const gitPromise = includeGitInfo
+    ? getCachedGitContext(workspaceRoot)
+    : Promise.resolve({ available: false });
+
+  const filesPromise = (maxRelevantFiles > 0 && keywords.length > 0)
+    ? (async () => {
+        let result = { used: false, files: [] };
+        if (useRipgrepIfAvailable) {
+          result = await findRelevantFilesWithRipgrep(workspaceRoot, keywords, maxRelevantFiles);
+        }
+        if (!result.files.length) {
+          result = await findRelevantFilesFallback(workspaceRoot, keywords, maxRelevantFiles);
+        }
+        return result.files;
+      })()
+    : Promise.resolve([]);
+
+  const [gitContext, discoveredFiles] = await Promise.all([gitPromise, filesPromise]);
+
+  let relevantFiles = discoveredFiles;
 
   // Add active file as "likely relevant" if present
   if (activeFilePath) {
@@ -139,12 +149,14 @@ async function gatherContext({ workspaceRoot, keywords, activeFilePath, selectio
     }
   }
 
-  // -- Snippets --
-  const snippets = [];
-  for (const rel of relevantFiles) {
-    const s = readSnippetForRelativeFile(workspaceRoot, rel, keywords, maxFileBytes);
-    if (s?.snippet) snippets.push(s);
-  }
+  // -- Snippets (read all in parallel) --
+  report("Reading file snippets...");
+  const snippetResults = await Promise.all(
+    relevantFiles.map((rel) =>
+      Promise.resolve(readSnippetForRelativeFile(workspaceRoot, rel, keywords, maxFileBytes))
+    )
+  );
+  const snippets = snippetResults.filter((s) => s?.snippet);
 
   // -- Assemble context text --
   const contextLines = [];
@@ -319,6 +331,7 @@ function buildTemplateEnhancedPrompt({ originalPrompt, contextText, relevantFile
  * @param {Object} [options.config] - Extension configuration overrides.
  * @param {AbortSignal} [options.abortSignal] - Signal to abort the operation.
  * @param {((inputText: string) => Promise<string|null>)} [options.callEditorLM] - Optional callback to call the editor's built-in language model.
+ * @param {(phase: string) => void} [options.onProgress] - Optional callback to report progress phases.
  * @returns {Promise<{enhancedPrompt: string, usedLLM: boolean, backend: string, keywords: string[], relevantFiles: string[]}>}
  */
 async function enhancePrompt({
@@ -329,6 +342,7 @@ async function enhancePrompt({
   config,
   abortSignal,
   callEditorLM,
+  onProgress,
 }) {
   if (!prompt || !prompt.trim()) {
     throw new Error("No prompt text provided.");
@@ -336,6 +350,8 @@ async function enhancePrompt({
   if (!workspaceRoot) {
     throw new Error("No workspace root found. Open a folder/workspace first.");
   }
+
+  const report = typeof onProgress === "function" ? onProgress : () => {};
 
   // 1. Extract keywords
   const keywords = extractKeywords(prompt);
@@ -347,6 +363,7 @@ async function enhancePrompt({
     activeFilePath,
     selectionText,
     config,
+    onProgress,
   });
 
   // 3. Build LLM input (shared across all LLM backends)
@@ -354,9 +371,11 @@ async function enhancePrompt({
 
   // 4a. Try editor-native LM (Cursor/Copilot) first
   if (typeof callEditorLM === "function") {
+    report("Calling Cursor AI...");
     try {
       const text = await callEditorLM(combinedInput);
       if (text && text.trim()) {
+        report("Polishing result...");
         return { enhancedPrompt: text.trim(), usedLLM: true, backend: "cursor", keywords, relevantFiles };
       }
     } catch (editorLMError) {
@@ -371,6 +390,7 @@ async function enhancePrompt({
   const model = (config?.openaiModel || "gpt-4o-mini").trim();
 
   if (apiKey) {
+    report("Calling OpenAI...");
     const llmText = await callOpenAI({
       apiKey,
       baseUrl,

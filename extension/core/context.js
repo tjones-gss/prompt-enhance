@@ -271,25 +271,18 @@ async function getGitContext(root) {
 
   const out = { available: true, statusPorcelain: "", changedFiles: [], diffStat: "", lastCommit: "" };
 
-  try {
-    const { stdout } = await execFileAsync("git", ["status", "--porcelain=v1"], { cwd: root, timeout: GIT_COMMAND_TIMEOUT });
-    out.statusPorcelain = stdout.trim();
-  } catch {}
+  // Run all 4 independent git commands in parallel for speed
+  const [statusResult, diffNameResult, diffStatResult, logResult] = await Promise.all([
+    execFileAsync("git", ["status", "--porcelain=v1"], { cwd: root, timeout: GIT_COMMAND_TIMEOUT }).catch(() => ({ stdout: "" })),
+    execFileAsync("git", ["diff", "--name-only"], { cwd: root, timeout: GIT_COMMAND_TIMEOUT }).catch(() => ({ stdout: "" })),
+    execFileAsync("git", ["diff", "--stat"], { cwd: root, timeout: GIT_COMMAND_TIMEOUT }).catch(() => ({ stdout: "" })),
+    execFileAsync("git", ["log", "-1", "--oneline"], { cwd: root, timeout: 2000 }).catch(() => ({ stdout: "" })),
+  ]);
 
-  try {
-    const { stdout } = await execFileAsync("git", ["diff", "--name-only"], { cwd: root, timeout: GIT_COMMAND_TIMEOUT });
-    out.changedFiles = stdout.split("\n").map(s => s.trim()).filter(Boolean).slice(0, 50);
-  } catch {}
-
-  try {
-    const { stdout } = await execFileAsync("git", ["diff", "--stat"], { cwd: root, timeout: GIT_COMMAND_TIMEOUT });
-    out.diffStat = stdout.trim();
-  } catch {}
-
-  try {
-    const { stdout } = await execFileAsync("git", ["log", "-1", "--oneline"], { cwd: root, timeout: 2000 });
-    out.lastCommit = stdout.trim();
-  } catch {}
+  out.statusPorcelain = statusResult.stdout.trim();
+  out.changedFiles = diffNameResult.stdout.split("\n").map(s => s.trim()).filter(Boolean).slice(0, 50);
+  out.diffStat = diffStatResult.stdout.trim();
+  out.lastCommit = logResult.stdout.trim();
 
   return out;
 }
@@ -418,18 +411,21 @@ async function findRelevantFilesWithRipgrep(root, keywords, maxFiles) {
   const rgOk = await commandWorks("rg", ["--version"]);
   if (!rgOk) return { used: false, files: [] };
 
-  for (const kw of keywords) {
-    try {
-      const { stdout } = await execFileAsync(
+  // Run all keyword searches in parallel for speed
+  const results = await Promise.all(
+    keywords.map((kw) =>
+      execFileAsync(
         "rg",
         ["-l", "--hidden", "--glob", "!**/.git/*", kw, "."],
         { cwd: root, timeout: RIPGREP_TIMEOUT }
-      );
-      const files = stdout.split("\n").map(s => s.trim()).filter(Boolean);
-      for (const f of files) {
-        scores.set(f, (scores.get(f) || 0) + 1);
-      }
-    } catch {}
+      ).catch(() => ({ stdout: "" }))
+    )
+  );
+  for (const { stdout } of results) {
+    const files = stdout.split("\n").map(s => s.trim()).filter(Boolean);
+    for (const f of files) {
+      scores.set(f, (scores.get(f) || 0) + 1);
+    }
   }
 
   const ranked = [...scores.entries()]

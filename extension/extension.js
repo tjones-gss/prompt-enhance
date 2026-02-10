@@ -27,6 +27,9 @@ let panel = null;
 /** @type {AbortController|null} */
 let inFlightAbort = null;
 
+/** Callback set by the webview to receive phase progress updates. */
+let _progressCallback = null;
+
 /** @type {vscode.OutputChannel|null} */
 let outputChannel = null;
 
@@ -451,6 +454,7 @@ async function enhanceFromEditorText(promptText, replaceSelection) {
       config: cfg,
       abortSignal: inFlightAbort.signal,
       callEditorLM: cfg.preferEditorLM ? callEditorLM : undefined,
+      onProgress: _progressCallback,
     });
     log(`enhanceFromEditorText: done — backend=${res.backend}, usedLLM=${res.usedLLM}, length=${res.enhancedPrompt.length}`);
   } finally {
@@ -508,22 +512,35 @@ function ensurePanel(context) {
           panel.webview.postMessage({ type: "error", message: "Type a prompt first." });
           return;
         }
-        panel.webview.postMessage({ type: "status", message: "Enhancing via Cursor CLI... (0s)" });
-
-        // Show a live countdown so the user knows it's still working
+        // Wire up phase-aware progress: the enhancer calls onProgress("phase label")
+        // and we forward it to the webview with an elapsed timer
         const startTime = Date.now();
-        const progressInterval = setInterval(() => {
+        let currentPhase = "Starting...";
+
+        _progressCallback = (phase) => {
+          currentPhase = phase;
           const elapsed = Math.round((Date.now() - startTime) / 1000);
           if (panel) {
-            panel.webview.postMessage({ type: "status", message: `Enhancing via Cursor CLI... (${elapsed}s)` });
+            panel.webview.postMessage({ type: "status", message: `${phase} (${elapsed}s)`, phase: true });
           }
-        }, 5000);
+        };
+
+        // Also tick every 3s so the elapsed time updates even within a long phase
+        const tickInterval = setInterval(() => {
+          const elapsed = Math.round((Date.now() - startTime) / 1000);
+          if (panel) {
+            panel.webview.postMessage({ type: "status", message: `${currentPhase} (${elapsed}s)`, phase: true });
+          }
+        }, 3000);
+
+        panel.webview.postMessage({ type: "status", message: "Starting... (0s)", phase: true });
 
         let res;
         try {
           res = await enhanceFromEditorText(promptText, false);
         } finally {
-          clearInterval(progressInterval);
+          clearInterval(tickInterval);
+          _progressCallback = null;
         }
 
         panel.webview.postMessage({
@@ -593,10 +610,33 @@ function getWebviewHtml(webview) {
     textarea { width: 100%; height: 260px; font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size: 12px; padding: 10px; box-sizing: border-box; }
     .row { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
     button { padding: 8px 12px; }
-    .status { margin-top: 10px; font-size: 12px; opacity: 0.85; }
+    .status { margin-top: 10px; font-size: 13px; opacity: 0.9; min-height: 20px; display: flex; align-items: center; gap: 8px; }
     .meta { margin-top: 10px; font-size: 12px; opacity: 0.85; }
     .error { color: #cc0000; }
     code { background: rgba(127,127,127,0.15); padding: 2px 4px; border-radius: 4px; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid rgba(127,127,127,0.3);
+      border-top-color: var(--vscode-progressBar-background, #0078d4);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+    .spinner.hidden { display: none; }
+
+    .tip {
+      margin-top: 6px;
+      font-size: 11px;
+      opacity: 0.6;
+      font-style: italic;
+      min-height: 16px;
+      transition: opacity 0.4s ease;
+    }
+    .tip.fade-in { opacity: 0.6; }
+    .tip.fade-out { opacity: 0; }
   </style>
 </head>
 <body>
@@ -617,30 +657,83 @@ function getWebviewHtml(webview) {
     <button id="sendToChatBtn">Send to Chat</button>
   </div>
 
-  <div id="status" class="status"></div>
+  <div id="status" class="status">
+    <span id="spinnerEl" class="spinner hidden"></span>
+    <span id="statusText"></span>
+  </div>
+  <div id="tip" class="tip"></div>
   <div id="meta" class="meta"></div>
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
 
     const promptEl = document.getElementById('prompt');
-    const statusEl = document.getElementById('status');
+    const statusTextEl = document.getElementById('statusText');
+    const spinnerEl = document.getElementById('spinnerEl');
+    const tipEl = document.getElementById('tip');
     const metaEl = document.getElementById('meta');
 
     let latestEnhanced = '';
+    let tipInterval = null;
 
-    function setStatus(msg, isError=false) {
-      statusEl.textContent = msg || '';
-      statusEl.className = 'status' + (isError ? ' error' : '');
+    const tips = [
+      'Tip: Select text in the editor and press Ctrl+Alt+P to enhance inline',
+      'Tip: Type @enhance in Chat for quick enhancement',
+      'Tip: Shorter prompts tend to get faster responses',
+      'Tip: The enhancer uses your git context and workspace files',
+      'Tip: Press Ctrl+Q to open this panel anytime',
+      'Tip: Enhanced prompts include relevant file paths from your project',
+    ];
+
+    function showSpinner(show) {
+      spinnerEl.className = show ? 'spinner' : 'spinner hidden';
+    }
+
+    function startTips() {
+      stopTips();
+      let idx = Math.floor(Math.random() * tips.length);
+      tipEl.textContent = tips[idx];
+      tipEl.className = 'tip fade-in';
+      tipInterval = setInterval(() => {
+        tipEl.className = 'tip fade-out';
+        setTimeout(() => {
+          idx = (idx + 1) % tips.length;
+          tipEl.textContent = tips[idx];
+          tipEl.className = 'tip fade-in';
+        }, 400);
+      }, 6000);
+    }
+
+    function stopTips() {
+      if (tipInterval) { clearInterval(tipInterval); tipInterval = null; }
+      tipEl.textContent = '';
+      tipEl.className = 'tip';
+    }
+
+    function setStatus(msg, isError, isPhase) {
+      statusTextEl.textContent = msg || '';
+      if (isError) {
+        showSpinner(false);
+        stopTips();
+        statusTextEl.style.color = '#cc0000';
+      } else if (isPhase) {
+        showSpinner(true);
+        statusTextEl.style.color = '';
+      } else {
+        showSpinner(false);
+        stopTips();
+        statusTextEl.style.color = '';
+      }
     }
 
     function enhanceNow() {
       const prompt = promptEl.value || '';
+      startTips();
       vscode.postMessage({ type: 'enhance', prompt });
     }
 
     document.getElementById('enhanceBtn').addEventListener('click', enhanceNow);
-    document.getElementById('cancelBtn').addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
+    document.getElementById('cancelBtn').addEventListener('click', () => { stopTips(); showSpinner(false); vscode.postMessage({ type: 'cancel' }); });
     document.getElementById('copyBtn').addEventListener('click', () => vscode.postMessage({ type: 'copy', text: latestEnhanced || promptEl.value || '' }));
     document.getElementById('insertBtn').addEventListener('click', () => vscode.postMessage({ type: 'insert', text: latestEnhanced || promptEl.value || '' }));
     document.getElementById('sendToChatBtn').addEventListener('click', () => vscode.postMessage({ type: 'sendToChat', text: latestEnhanced || promptEl.value || '' }));
@@ -658,10 +751,13 @@ function getWebviewHtml(webview) {
       const msg = event.data;
       if (!msg) return;
       if (msg.type === 'status') {
-        setStatus(msg.message || '');
+        setStatus(msg.message || '', false, !!msg.phase);
+        if (!msg.phase) stopTips();
       } else if (msg.type === 'error') {
-        setStatus(msg.message || 'Error', true);
+        setStatus(msg.message || 'Error', true, false);
       } else if (msg.type === 'enhanced') {
+        showSpinner(false);
+        stopTips();
         latestEnhanced = msg.enhancedPrompt || '';
         promptEl.value = latestEnhanced;
         const files = Array.isArray(msg.relevantFiles) ? msg.relevantFiles : [];
