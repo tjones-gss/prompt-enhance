@@ -15,7 +15,7 @@ const { OpenAIError } = require("./core/openai");
 // ---------------------------------------------------------------------------
 
 /** Maximum time (ms) to wait for an enhance operation before auto-aborting. */
-const ENHANCE_TIMEOUT_MS = 90_000;
+const ENHANCE_TIMEOUT_MS = 150_000;
 
 // ---------------------------------------------------------------------------
 // State
@@ -324,13 +324,13 @@ async function callEditorLM(inputText) {
       try { fs.unlinkSync(tmpFile); } catch {}
     }
 
-    // Auto-kill after 60 seconds
+    // Auto-kill after 120 seconds
     const timer = setTimeout(() => {
-      log("callEditorLM: TIMEOUT (60s), killing process");
+      log("callEditorLM: TIMEOUT (120s), killing process");
       proc.kill();
       cleanup();
-      reject(new Error("Cursor CLI timed out (60 s). Try a shorter prompt."));
-    }, 60_000);
+      reject(new Error("Cursor CLI timed out (120 s). Try a shorter prompt."));
+    }, 120_000);
 
     proc.on("error", (err) => {
       log(`callEditorLM: process error: ${err.message}`);
@@ -483,9 +483,23 @@ function ensurePanel(context) {
           panel.webview.postMessage({ type: "error", message: "Type a prompt first." });
           return;
         }
-        panel.webview.postMessage({ type: "status", message: "Enhancing (this may take 20-50s with Cursor CLI)..." });
+        panel.webview.postMessage({ type: "status", message: "Enhancing via Cursor CLI... (0s)" });
 
-        const res = await enhanceFromEditorText(promptText, false);
+        // Show a live countdown so the user knows it's still working
+        const startTime = Date.now();
+        const progressInterval = setInterval(() => {
+          const elapsed = Math.round((Date.now() - startTime) / 1000);
+          if (panel) {
+            panel.webview.postMessage({ type: "status", message: `Enhancing via Cursor CLI... (${elapsed}s)` });
+          }
+        }, 5000);
+
+        let res;
+        try {
+          res = await enhanceFromEditorText(promptText, false);
+        } finally {
+          clearInterval(progressInterval);
+        }
 
         panel.webview.postMessage({
           type: "enhanced",
