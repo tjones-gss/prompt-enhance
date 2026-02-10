@@ -27,6 +27,24 @@ let panel = null;
 /** @type {AbortController|null} */
 let inFlightAbort = null;
 
+/** @type {vscode.OutputChannel|null} */
+let outputChannel = null;
+
+// ---------------------------------------------------------------------------
+// Logging
+// ---------------------------------------------------------------------------
+
+/**
+ * Log a message to the Prompt Enhancer output channel.
+ * @param {string} msg
+ */
+function log(msg) {
+  const ts = new Date().toISOString().slice(11, 23);
+  const line = `[${ts}] ${msg}`;
+  if (outputChannel) outputChannel.appendLine(line);
+  console.log(`[PromptEnhancer] ${msg}`);
+}
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -137,8 +155,12 @@ let _shownCLINotice = false;
  * @returns {Promise<string|null>} Absolute path to the CLI executable, or null.
  */
 async function findAgentCLI() {
-  if (_agentCLIPath !== null) return _agentCLIPath || null;
+  if (_agentCLIPath !== null) {
+    log(`findAgentCLI: returning cached result: ${_agentCLIPath || "(not found)"}`);
+    return _agentCLIPath || null;
+  }
 
+  log("findAgentCLI: searching for Cursor CLI...");
   const isWin = process.platform === "win32";
 
   // 1. Check well-known install locations
@@ -152,24 +174,42 @@ async function findAgentCLI() {
   }
 
   for (const p of candidates) {
-    try {
-      fs.accessSync(p, fs.constants.X_OK);
-      _agentCLIPath = p;
-      return p;
-    } catch {
-      // not found here, keep looking
+    const exists = fs.existsSync(p);
+    log(`findAgentCLI: checking ${p} — exists: ${exists}`);
+    if (exists) {
+      try {
+        fs.accessSync(p, fs.constants.X_OK);
+        log(`findAgentCLI: FOUND (X_OK) at ${p}`);
+        _agentCLIPath = p;
+        return p;
+      } catch (accessErr) {
+        log(`findAgentCLI: exists but X_OK failed: ${accessErr.message}. Trying R_OK...`);
+        // On Windows, X_OK can fail for .cmd files even though they're executable.
+        // Fall back to R_OK (readable) which is sufficient for .cmd files.
+        try {
+          fs.accessSync(p, fs.constants.R_OK);
+          log(`findAgentCLI: FOUND (R_OK fallback) at ${p}`);
+          _agentCLIPath = p;
+          return p;
+        } catch (readErr) {
+          log(`findAgentCLI: R_OK also failed: ${readErr.message}`);
+        }
+      }
     }
   }
 
   // 2. Fall back to PATH lookup
+  log("findAgentCLI: candidates not found, trying PATH lookup...");
   return new Promise((resolve) => {
     const cmd = isWin ? "where" : "which";
     cp.execFile(cmd, ["agent"], { timeout: 5000 }, (err, stdout) => {
       if (err || !stdout?.trim()) {
+        log(`findAgentCLI: PATH lookup failed (${err?.message || "no output"})`);
         _agentCLIPath = false;
         resolve(null);
       } else {
         const found = stdout.trim().split(/\r?\n/)[0];
+        log(`findAgentCLI: FOUND via PATH at ${found}`);
         _agentCLIPath = found;
         resolve(found);
       }
@@ -185,8 +225,10 @@ async function findAgentCLI() {
  * @returns {Promise<string|null>} The AI-generated text, or null if the CLI is unavailable.
  */
 async function callEditorLM(inputText) {
+  log(`callEditorLM: called with ${inputText.length} chars`);
   const agentPath = await findAgentCLI();
   if (!agentPath) {
+    log("callEditorLM: CLI not found, returning null");
     if (!_shownCLINotice) {
       _shownCLINotice = true;
       vscode.window
@@ -205,6 +247,8 @@ async function callEditorLM(inputText) {
     return null;
   }
 
+  log(`callEditorLM: CLI found at ${agentPath}`);
+
   // Find the bundled rg.exe path so the CLI can locate ripgrep
   const agentDir = path.dirname(agentPath);
   let extraPath = "";
@@ -217,12 +261,13 @@ async function callEditorLM(inputText) {
         const rgCandidate = path.join(versionsDir, v, process.platform === "win32" ? "rg.exe" : "rg");
         if (fs.existsSync(rgCandidate)) {
           extraPath = path.join(versionsDir, v);
+          log(`callEditorLM: found bundled rg at ${extraPath}`);
           break;
         }
       }
     }
-  } catch {
-    // ignore -- the CLI may still work without extra PATH
+  } catch (rgErr) {
+    log(`callEditorLM: rg search error (non-fatal): ${rgErr.message}`);
   }
 
   // Write the prompt to a temp file, then use cmd.exe file redirect (<) to
@@ -230,6 +275,7 @@ async function callEditorLM(inputText) {
   // for large multi-line inputs; file redirect is reliable cross-platform.
   const tmpFile = path.join(os.tmpdir(), `pe-prompt-${Date.now()}.txt`);
   fs.writeFileSync(tmpFile, inputText, "utf8");
+  log(`callEditorLM: wrote ${inputText.length} chars to ${tmpFile}`);
 
   return new Promise((resolve, reject) => {
     const env = { ...process.env };
@@ -244,12 +290,15 @@ async function callEditorLM(inputText) {
     // On Unix, we can pipe stdin directly.
     let proc;
     if (isWin) {
-      proc = cp.spawn("cmd.exe", ["/c", agentPath, ...args, "<", tmpFile], {
+      const spawnArgs = ["/c", agentPath, ...args, "<", tmpFile];
+      log(`callEditorLM: spawning cmd.exe ${spawnArgs.join(" ")}`);
+      proc = cp.spawn("cmd.exe", spawnArgs, {
         stdio: ["ignore", "pipe", "pipe"],
         env,
         cwd: getWorkspaceRoot() || undefined,
       });
     } else {
+      log(`callEditorLM: spawning ${agentPath} ${args.join(" ")}`);
       proc = cp.spawn(agentPath, args, {
         stdio: ["pipe", "pipe", "pipe"],
         env,
@@ -259,6 +308,8 @@ async function callEditorLM(inputText) {
       proc.stdin.write(inputText);
       proc.stdin.end();
     }
+
+    log(`callEditorLM: process spawned, pid=${proc.pid}`);
 
     let stdout = "";
     let stderr = "";
@@ -271,12 +322,14 @@ async function callEditorLM(inputText) {
 
     // Auto-kill after 60 seconds
     const timer = setTimeout(() => {
+      log("callEditorLM: TIMEOUT (60s), killing process");
       proc.kill();
       cleanup();
       reject(new Error("Cursor CLI timed out (60 s). Try a shorter prompt."));
     }, 60_000);
 
     proc.on("error", (err) => {
+      log(`callEditorLM: process error: ${err.message}`);
       clearTimeout(timer);
       cleanup();
       reject(err);
@@ -285,14 +338,19 @@ async function callEditorLM(inputText) {
     proc.on("close", (code) => {
       clearTimeout(timer);
       cleanup();
+      log(`callEditorLM: process exited code=${code}, stdout=${stdout.length} chars, stderr=${stderr.length} chars`);
+      if (stderr.trim()) log(`callEditorLM: stderr: ${stderr.trim().substring(0, 500)}`);
       if (code !== 0) {
         if (stderr && /auth/i.test(stderr)) {
+          log("callEditorLM: REJECTED — auth error");
           reject(new Error("Cursor CLI not authenticated. Run: agent login"));
         } else {
+          log(`callEditorLM: REJECTED — exit code ${code}`);
           reject(new Error(stderr.trim() || `Cursor CLI exited with code ${code}`));
         }
         return;
       }
+      log(`callEditorLM: RESOLVED with ${stdout.trim().length} chars`);
       resolve(stdout.trim() || null);
     });
   });
@@ -325,7 +383,9 @@ function backendLabel(backend) {
  * @returns {Promise<{enhancedPrompt: string, usedLLM: boolean, keywords: string[], relevantFiles: string[]}>}
  */
 async function enhanceFromEditorText(promptText, replaceSelection) {
+  log(`enhanceFromEditorText: prompt="${promptText.substring(0, 80)}..." (${promptText.length} chars)`);
   const root = getWorkspaceRoot();
+  log(`enhanceFromEditorText: workspaceRoot=${root}`);
   const editor = vscode.window.activeTextEditor;
   const activeFilePath = editor?.document?.uri?.fsPath;
   const selectionText = editor && editor.selection && !editor.selection.isEmpty
@@ -333,6 +393,7 @@ async function enhanceFromEditorText(promptText, replaceSelection) {
     : "";
 
   const cfg = getCfg();
+  log(`enhanceFromEditorText: preferEditorLM=${cfg.preferEditorLM}, openaiApiKey=${cfg.openaiApiKey ? "(set)" : "(empty)"}`);
 
   // Cancel any previous request
   if (inFlightAbort) {
@@ -343,11 +404,16 @@ async function enhanceFromEditorText(promptText, replaceSelection) {
 
   // Auto-abort after timeout so we don't hang forever
   const timer = setTimeout(() => {
+    log("enhanceFromEditorText: TIMEOUT — aborting");
     if (inFlightAbort) inFlightAbort.abort();
   }, ENHANCE_TIMEOUT_MS);
 
+  // Show the output channel so user can see progress
+  if (outputChannel) outputChannel.show(true);
+
   let res;
   try {
+    log("enhanceFromEditorText: calling enhancePrompt...");
     res = await enhancePrompt({
       prompt: promptText,
       workspaceRoot: root,
@@ -357,6 +423,7 @@ async function enhanceFromEditorText(promptText, replaceSelection) {
       abortSignal: inFlightAbort.signal,
       callEditorLM: cfg.preferEditorLM ? callEditorLM : undefined,
     });
+    log(`enhanceFromEditorText: done — backend=${res.backend}, usedLLM=${res.usedLLM}, length=${res.enhancedPrompt.length}`);
   } finally {
     clearTimeout(timer);
   }
@@ -412,7 +479,7 @@ function ensurePanel(context) {
           panel.webview.postMessage({ type: "error", message: "Type a prompt first." });
           return;
         }
-        panel.webview.postMessage({ type: "status", message: "Enhancing..." });
+        panel.webview.postMessage({ type: "status", message: "Enhancing (this may take 20-50s with Cursor CLI)..." });
 
         const res = await enhanceFromEditorText(promptText, false);
 
@@ -576,6 +643,13 @@ function getWebviewHtml(webview) {
  * @param {vscode.ExtensionContext} context
  */
 function activate(context) {
+  // Create output channel for diagnostics
+  outputChannel = vscode.window.createOutputChannel("Prompt Enhancer");
+  context.subscriptions.push(outputChannel);
+  log("Extension activated");
+  log(`Platform: ${process.platform}, Node: ${process.version}`);
+  log(`LOCALAPPDATA: ${process.env.LOCALAPPDATA || "(not set)"}`);
+
   // Validate config on activation
   checkAndWarnConfig();
 
