@@ -201,7 +201,9 @@ async function findAgentCLI() {
   // 2. Fall back to PATH lookup
   log("findAgentCLI: candidates not found, trying PATH lookup...");
   return new Promise((resolve) => {
-    const cmd = isWin ? "where" : "which";
+    const cmd = isWin
+      ? path.join(process.env.SystemRoot || "C:\\Windows", "System32", "where.exe")
+      : "which";
     cp.execFile(cmd, ["agent"], { timeout: 5000 }, (err, stdout) => {
       if (err || !stdout?.trim()) {
         log(`findAgentCLI: PATH lookup failed (${err?.message || "no output"})`);
@@ -287,12 +289,14 @@ async function callEditorLM(inputText) {
     const isWin = process.platform === "win32";
 
     // On Windows, .cmd files must be invoked via cmd.exe /c with < redirect.
+    // Use ComSpec (full path) because the extension host PATH may not include System32.
     // On Unix, we can pipe stdin directly.
     let proc;
     if (isWin) {
+      const comspec = process.env.ComSpec || path.join(process.env.SystemRoot || "C:\\Windows", "System32", "cmd.exe");
       const spawnArgs = ["/c", agentPath, ...args, "<", tmpFile];
-      log(`callEditorLM: spawning cmd.exe ${spawnArgs.join(" ")}`);
-      proc = cp.spawn("cmd.exe", spawnArgs, {
+      log(`callEditorLM: spawning ${comspec} ${spawnArgs.join(" ")}`);
+      proc = cp.spawn(comspec, spawnArgs, {
         stdio: ["ignore", "pipe", "pipe"],
         env,
         cwd: getWorkspaceRoot() || undefined,
