@@ -4,6 +4,9 @@
 
 set -euo pipefail
 
+# Always run from the project root (wherever the script lives)
+cd "$(dirname "$0")"
+
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'

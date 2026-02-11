@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.2] - 2026-02-09
+
+### Fixed
+- **Windows paths with spaces:** Quoted temp file and agent paths in `cmd.exe` redirect so usernames with spaces (e.g. "Jane Doe") no longer break the CLI call.
+- **macOS keybinding conflict:** Changed "Open Panel" keybinding from `Cmd+Q` (which quits macOS apps) to `Cmd+Shift+E` / `Ctrl+Shift+E`.
+- **Auth error detection:** Broadened stderr pattern to catch "login", "log in", "authenticate", and "not logged" in addition to "auth".
+
+### Changed
+- Setup scripts (`setup.ps1`, `setup.sh`) now auto-`cd` to the project root, so they work correctly when run from any directory.
+- Added `~/.local/bin/agent` as an additional CLI search path for Linux.
+- CLI banner now mentions the OpenAI API key alternative and uses clearer wording.
+- CLI timeout is now configurable via `promptEnhancer.cliTimeoutSeconds` (default 120s, max 600s) instead of hardcoded.
+- Webview tip updated to show `Ctrl+Shift+E` / `Cmd+Shift+E` shortcut.
+
+### Added
+- **Troubleshooting section** in README covering all common issues (proxy, permissions, timeout, etc.).
+- **Execution policy** and **chmod** guidance in README Quick Start.
+
 ## [0.5.1] - 2026-02-09
 
 ### Changed

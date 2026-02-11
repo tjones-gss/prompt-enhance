@@ -12,9 +12,11 @@ Also includes an **MCP Server** for Cursor Agent that gathers repo context so Cu
 
 ## Prerequisites
 
-- **Node.js** >= 18
+- **Node.js** >= 18 (verify: `node --version`)
 - **Cursor** or **VS Code** >= 1.93
 - **Cursor CLI** (recommended) -- for AI-powered enhancement without an API key
+
+> **Note for macOS/Linux:** The `@enhance` chat participant is Cursor-specific and may not appear in plain VS Code.
 
 ### Installing the Cursor CLI
 
@@ -47,15 +49,27 @@ agent --version
 ```bash
 git clone https://github.com/tjones-gss/prompt-enhance.git
 cd prompt-enhance
+```
 
-# Windows (PowerShell)
+**Windows (PowerShell):**
+
+> If scripts are blocked, first run:
+> `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
+
+```powershell
 .\setup.ps1
+```
 
-# macOS / Linux / WSL
+**macOS / Linux / WSL:**
+
+```bash
+chmod +x setup.sh   # only needed once after clone
 ./setup.sh
 ```
 
 The setup script handles everything: installs the Cursor CLI, authenticates, installs npm dependencies, builds the VSIX, and installs the extension into Cursor. Just follow the prompts.
+
+> **Important:** Always run the setup scripts from the project root directory. They will `cd` automatically if run from elsewhere, but the clone step above should place you in the right folder.
 
 ### Manual Setup (alternative)
 
@@ -77,7 +91,7 @@ Then install the `.vsix` from `build/`:
 
 | Command | Shortcut | Description |
 |---------|----------|-------------|
-| **Prompt Enhancer: Open Panel** | -- | Opens the webview panel |
+| **Prompt Enhancer: Open Panel** | `Ctrl+Shift+E` (`Cmd+Shift+E` on Mac) | Opens the webview panel |
 | **Prompt Enhancer: Enhance Selected Text** | `Ctrl+Alt+P` | Enhances the selected text in-place |
 | **Prompt Enhancer: Enhance Clipboard Text** | -- | Enhances text from your clipboard |
 | **Prompt Enhancer: Enhance & Send to Chat** | Right-click menu | Enhances selection and fills the chat input |
@@ -105,7 +119,7 @@ Edit `~/.cursor/mcp.json` (or go to **Cursor Settings > Tools & Integrations > M
   "mcpServers": {
     "prompt-enhancer": {
       "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/mcp-server/server.js"]
+      "args": ["C:/Users/YOUR_USERNAME/prompt-enhance/mcp-server/server.js"]
     }
   }
 }
@@ -134,6 +148,20 @@ All settings are under `promptEnhancer.*` in VS Code / Cursor settings:
 | `useRipgrepIfAvailable` | `true` | Use ripgrep (`rg`) for fast file discovery if available. |
 | `includeGitInfo` | `true` | Include git status and changed files as context. |
 | `autoCopyToClipboard` | `true` | Auto-copy the enhanced prompt to clipboard. |
+| `cliTimeoutSeconds` | `120` | Max seconds to wait for Cursor CLI. Increase for slow machines or large prompts. |
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| **"Backend: Template" instead of AI** | The Cursor CLI is not installed or not authenticated. Click the "Install & Authenticate Cursor CLI" button in the panel, or run `agent login` in a terminal. |
+| **CLI times out** | Increase `promptEnhancer.cliTimeoutSeconds` in settings (default 120s, max 600s). |
+| **PowerShell: "running scripts is disabled"** | Run: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` |
+| **macOS/Linux: "Permission denied"** | Run: `chmod +x setup.sh` |
+| **`cursor` / `code` not found during setup** | Install the VSIX manually: `Ctrl+Shift+P` > **Extensions: Install from VSIX...** > select `build/*.vsix`. |
+| **Proxy / firewall blocks CLI install** | Download the CLI manually from [cursor.com/install](https://cursor.com) and ensure `agent` is on your PATH. |
+| **`agent login` doesn't open a browser** | Copy the login URL from the terminal and paste it into your browser manually. |
+| **Extension works in Cursor but not VS Code** | The `@enhance` chat participant and Cursor CLI backend require Cursor. VS Code users should configure an OpenAI API key. |
 
 ## Development
 

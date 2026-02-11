@@ -68,6 +68,7 @@ function getCfg() {
     includeGitInfo: cfg.get("includeGitInfo", true),
     autoCopyToClipboard: cfg.get("autoCopyToClipboard", true),
     preferEditorLM: cfg.get("preferEditorLM", true),
+    cliTimeoutSeconds: cfg.get("cliTimeoutSeconds", 120),
   };
 }
 
@@ -197,6 +198,7 @@ async function findAgentCLI() {
     candidates.push(path.join(localAppData, "cursor-agent", "agent.cmd"));
   } else {
     candidates.push(path.join(os.homedir(), ".cursor", "bin", "agent"));
+    candidates.push(path.join(os.homedir(), ".local", "bin", "agent"));
     candidates.push("/usr/local/bin/agent");
   }
 
@@ -317,7 +319,8 @@ async function callEditorLM(inputText) {
     let proc;
     if (isWin) {
       const comspec = process.env.ComSpec || path.join(process.env.SystemRoot || "C:\\Windows", "System32", "cmd.exe");
-      const spawnArgs = ["/c", agentPath, ...args, "<", tmpFile];
+      // Quote paths so spaces in usernames (e.g. "Jane Doe") don't break the redirect
+      const spawnArgs = ["/c", `"${agentPath}"`, ...args, "<", `"${tmpFile}"`];
       log(`callEditorLM: spawning ${comspec} ${spawnArgs.join(" ")}`);
       proc = cp.spawn(comspec, spawnArgs, {
         stdio: ["ignore", "pipe", "pipe"],
@@ -348,12 +351,13 @@ async function callEditorLM(inputText) {
     }
 
     // Auto-kill after 120 seconds
+    const cliTimeout = getCfg().cliTimeoutSeconds * 1000;
     const timer = setTimeout(() => {
-      log("callEditorLM: TIMEOUT (120s), killing process");
+      log(`callEditorLM: TIMEOUT (${getCfg().cliTimeoutSeconds}s), killing process`);
       proc.kill();
       cleanup();
-      reject(new Error("Cursor CLI timed out (120 s). Try a shorter prompt."));
-    }, 120_000);
+      reject(new Error(`Cursor CLI timed out (${getCfg().cliTimeoutSeconds}s). Try a shorter prompt or increase promptEnhancer.cliTimeoutSeconds in settings.`));
+    }, cliTimeout);
 
     proc.on("error", (err) => {
       log(`callEditorLM: process error: ${err.message}`);
@@ -368,7 +372,7 @@ async function callEditorLM(inputText) {
       log(`callEditorLM: process exited code=${code}, stdout=${stdout.length} chars, stderr=${stderr.length} chars`);
       if (stderr.trim()) log(`callEditorLM: stderr: ${stderr.trim().substring(0, 500)}`);
       if (code !== 0) {
-        if (stderr && /auth/i.test(stderr)) {
+        if (stderr && /auth|login|log in|authenticate|not logged/i.test(stderr)) {
           log("callEditorLM: REJECTED — auth error");
           reject(new Error("Cursor CLI not authenticated. Run: agent login"));
         } else {
@@ -681,8 +685,9 @@ function getWebviewHtml(webview) {
   <div id="meta" class="meta"></div>
 
   <div id="cliBanner" class="cli-banner">
-    <p><strong>AI enhancement requires the Cursor CLI.</strong> The result above used a basic template instead of AI. Install the CLI to get full AI-powered enhancement (uses your Cursor subscription, no API key needed).</p>
-    <button id="installCliBtn">Install Cursor CLI</button>
+    <p><strong>Cursor CLI not found</strong> &mdash; enhancement used a basic template instead of AI. Install the CLI for full AI-powered results (uses your Cursor subscription, no API key needed).</p>
+    <p style="font-size:12px;opacity:0.85;">Alternatively, set an <strong>OpenAI API key</strong> in settings to use AI without the CLI.</p>
+    <button id="installCliBtn">Install &amp; Authenticate Cursor CLI</button>
   </div>
 
   <script nonce="${nonce}">
@@ -709,7 +714,7 @@ function getWebviewHtml(webview) {
       'Tip: Type @enhance in Chat for quick enhancement',
       'Tip: Shorter prompts tend to get faster responses',
       'Tip: The enhancer uses your git context and workspace files',
-      'Tip: Press Ctrl+Q to open this panel anytime',
+      'Tip: Press Ctrl+Shift+E (Cmd+Shift+E on Mac) to open this panel anytime',
       'Tip: Enhanced prompts include relevant file paths from your project',
     ];
 

@@ -3,6 +3,9 @@
 
 $ErrorActionPreference = "Stop"
 
+# Always run from the project root (wherever the script lives)
+Set-Location $PSScriptRoot
+
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host " Prompt Enhancer - Team Setup (Windows) " -ForegroundColor Cyan

@@ -2,7 +2,7 @@
   "name": "prompt-enhancer-auggie-style",
   "displayName": "Prompt Enhancer (Auggie-style)",
   "description": "Enhance rough prompts into detailed, context-aware instructions (Auggie-style). Includes a Ctrl+P webview workflow and editor selection enhancement.",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "publisher": "local",
   "license": "MIT",
   "repository": {
@@ -75,8 +75,8 @@
     "keybindings": [
       {
         "command": "promptEnhancer.openPanel",
-        "key": "ctrl+q",
-        "mac": "cmd+q"
+        "key": "ctrl+shift+e",
+        "mac": "cmd+shift+e"
       },
       {
         "command": "promptEnhancer.enhanceSelection",
@@ -136,6 +136,13 @@
           "type": "boolean",
           "default": true,
           "description": "Prefer the Cursor CLI (agent) over OpenAI for AI-powered enhancement. Set to false to always use OpenAI when a key is configured."
+        },
+        "promptEnhancer.cliTimeoutSeconds": {
+          "type": "number",
+          "default": 120,
+          "minimum": 30,
+          "maximum": 600,
+          "description": "Maximum seconds to wait for the Cursor CLI to respond. Increase if you experience timeouts on slower machines or large prompts."
         }
       }
     }
